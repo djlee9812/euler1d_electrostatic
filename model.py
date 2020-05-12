@@ -13,19 +13,18 @@ delta_x = length / steps
 # rho_c = 1e-6 # [C/m^3] Charge density
 eps = 8.854e-12 # [F/m] Absolute Dielectric Constant
 b = 2.43e-4 # [m^2/(V*sec)] Ion mobility
-v0 = 50 # [m/s] Carrier fluid velocity
 k = 2.534e-2 # [W/(m*K)] Thermal conductivity of air at sea level
 R = 287 # [J/(kg*K)] Gas constant
 Cv = 718 # [J/(kg*K)] Specific heat of air at constant volume (Cv*T+.5v^2 = e)
-E0 = 0 # [V/m] Electric field at x=0
-p0 = 101325 # [Pa] Pressure at x=0
-rho0 = 1.225 # [kg/m^3] air density at x=0
+E_init = 0 # [V/m] Electric field at x=0
+p_init = 101325 # [Pa] Pressure at x=0
+rho_init = 1.225 # [kg/m^3] air density at x=0
+v_init = 50 # [m/s] Carrier fluid velocity
 u = 10000 # [V] voltage between emitter and collector
 u_star = 0
+n_stages = 100
 
-
-
-def func_j(guess):
+def func_j(guess, E0, v0):
     """
     Relation of j, E, and U -> f(j) = 0
     :params guess: Guess for value of j
@@ -36,7 +35,7 @@ def func_j(guess):
     c4 = (E0+v0/b)**3
     return (c1*guess+c2)**(3/2) - c3*guess - c4
 
-def deriv_j(guess):
+def deriv_j(guess, E0, v0):
     """
     Derivative of func_j() wrt j
     :params guess: Guess for value of j
@@ -46,17 +45,17 @@ def deriv_j(guess):
     c3 = 3*(u-u_star)/(eps*b) + 3*v0*length/(eps*b**2)
     return 3/2 * c1 * (c1*guess+c2)**(1/2) - c3
 
-def solve_j(guess, reltol=1e-6):
+def solve_j(guess, E0, v0, reltol=1e-6):
     """
     Solves for positive solution for current density (in case 2 exist)
     """
     nfev = 0
     last_guess = 0
     value = 1
-    while abs(last_guess - guess) > reltol or abs(func_j(guess)) > 1e3:
+    while abs(last_guess - guess) > reltol or abs(func_j(guess, E0, v0)) > 1e3:
         last_guess = guess
-        value = func_j(guess)
-        deriv = deriv_j(guess)
+        value = func_j(guess, E0, v0)
+        deriv = deriv_j(guess, E0, v0)
         # Use abs value because function of function shape:
         # Should increase if f < 0, decrease if f > 0
         guess -= value / abs(deriv)/2
@@ -67,27 +66,27 @@ def solve_j(guess, reltol=1e-6):
             break
     return guess
 
-def E_analytical(x, j):
+def E_analytical(x, j, E0, v0):
     return (2*j*x/(eps*b) + (E0 + v0/b)**2)**0.5 - v0/b
 
-def incomp_p(x, j):
+def incomp_p(x, j, E0, v0, p0):
     inner = (2*j*x/(eps*b) + (E0 + v0/b) ** 2) **(1/2) - (E0 + v0/b)
     outer = 2*j*x/(eps*b) - 2*v0/b * inner
     return eps/2 * outer + p0
 
-def incomp_rho_c(x, j):
+def incomp_rho_c(x, j, E0, v0):
     return (j/b) / ( (2*j*x)/(eps*b) + (E0+(v0/b))**2 )**(.5)
 
-def model_incomp():
+def model_incomp(E0, v0):
     xs = np.array([delta_x * i for i in range(steps+1)])
     E_num = np.zeros(steps+1)
     p_num = np.zeros(steps+1)
     E_num[0] = E0
     p_num[0] = p0
-    j = solve_j(1)
-    rho_c_an = np.array([incomp_rho_c(x, j) for x in xs])
-    p_an = np.array([incomp_p(x, j) for x in xs])
-    E_an = np.array([E_analytical(x, j) for x in xs])
+    j = solve_j(1, E0, v0)
+    rho_c_an = np.array([incomp_rho_c(x, j, E0, v0) for x in xs])
+    p_an = np.array([incomp_p(x, j, E0, v0, p0) for x in xs])
+    E_an = np.array([E_analytical(x, j, E0, v0) for x in xs])
 
     for i in range(1, steps+1):
         x = xs[i]
@@ -133,7 +132,7 @@ def plot_iterations(results, step_size=3):
     plt.tight_layout()
     plt.show()
 
-def f_eval(x, u):
+def f_eval(x, u, rho0, v0, p0):
     """
     Evaluate f(x,u) = 0
     N = n_steps - 1 (index of last element)
@@ -165,7 +164,7 @@ def f_eval(x, u):
             ( (v[N]*(rho[N]*e[N]+p[N]) - v[N-1]*(rho[N-1]*e[N-1]+p[N-1]))/delta_x - rho_c[N]*E[N]*v[N] )]
     return f
 
-def jac_est(x, u, eps=1e-3):
+def jac_est(x, u, rho0, v0, p0, eps=1e-3):
     """
     Numerical jacobian estimator for f
     Flattens x array into [p_0,...,p_i, rho_i, v_i,...,v_N+1] then iterates
@@ -184,17 +183,17 @@ def jac_est(x, u, eps=1e-3):
         inc[i] = eps
         inc = inc.reshape(x.shape)
         # Evaluate f at x+inc and at x for ith column of jacobian
-        col = (f_eval(x+inc, u) - f_eval(x, u)) / eps
+        col = (f_eval(x+inc, u, rho0, v0, p0) - f_eval(x, u, rho0, v0, p0)) / eps
         jac[:,i] = col.flatten()
     return jac
 
 
-def model(tol=1.5, plot=False):
+def model(E0, rho0, v0, p0, tol=1, plot=False):
     # Use Incompressible analytical solution for E and rho_c
     xs = np.array([delta_x * i for i in range(steps)])
-    j = solve_j(1)
-    rho_c_an = np.array([incomp_rho_c(x, j) for x in xs])
-    E_an = np.array([E_analytical(x, j) for x in xs])
+    j = solve_j(1, E0, v0)
+    rho_c_an = np.array([incomp_rho_c(x, j, E0, v0) for x in xs])
+    E_an = np.array([E_analytical(x, j, E0, v0) for x in xs])
     # u = [charge density.T, E-field.T] (N, 2)
     u = np.array([rho_c_an, E_an]).T
     # Initialize empty arrays and set initial conditions
@@ -202,23 +201,23 @@ def model(tol=1.5, plot=False):
     x[:,0] *= p0
     x[:,1] *= rho0
     x[:,2] *= v0
-    f = f_eval(x,u)
+    f = f_eval(x, u, rho0, v0, p0)
     # start = time.time()
     # for i in range(5000):
-    #     f = f_eval(x, u)
+    #     f = f_eval(x, u, rho0, v0, p0)
     # print(str((time.time()-start)/5000) + "seconds each")
     # return
     nit = 0
     results = [x.copy()]
     while np.linalg.norm(f) > tol and nit < 100:
-        jac = jac_est(x, u)
+        jac = jac_est(x, u, rho0, v0, p0)
         try:
             dx = np.linalg.solve(jac, -f.flatten())
         except:
             print("Jacobian is singular")
             break
         x += dx.reshape(x.shape)
-        f = f_eval(x, u)
+        f = f_eval(x, u, rho0, v0, p0)
         nit += 1
         if nit%3 == 0: print(nit, np.linalg.norm(f))
         results.append(x.copy())
@@ -236,24 +235,38 @@ if __name__ == "__main__":
     # plt.plot(js, func_j(js))
     # plt.show()
 
-    # model_incomp()
+    p0, p_incomp0, rho0, v0, E0 = (p_init, p_init, rho_init, v_init, E_init)
+    # model_incomp(E0, v0)
 
-    xs = np.array([delta_x * i for i in range(steps)])
-    j = solve_j(1)
-    print("j:", j, func_j(j))
-    p_an = np.array([incomp_p(x, j) for x in xs])
+    x = np.empty((0,3))
+    xs = np.array([])
+    p_an = np.array([])
+    for i in range(n_stages):
+        # Solve j given initial E and v
+        j = solve_j(1, E0, v0)
+        # Append to xs arrray and analytical incomp pressure solution
+        xs_i = np.array([delta_x * j for j in range(steps)])
+        p_an_i = np.array([incomp_p(x, j, E0, v0, p_incomp0) for x in xs_i])
+        xs = np.append(xs, xs_i+length*i)
+        p_an = np.append(p_an, p_an_i)
+        # Solve compressible values and append to x
+        x_i, err, nit = model(E0, rho0, v0, p0)
+        x = np.append(x, x_i, axis=0)
+        # Reset boundary conditions for next stage
+        p0, rho0, v0 = x_i[-1]
+        p_incomp0 = p_an[-1]
 
-    x, err, nit = model()
+
     p, rho, v = x.T
 
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(9,7))
     fig.suptitle("Change in Flow Quantities across Ion Thruster")
-    ax1.plot(xs*1e3, p-p0, label="Compressible")
-    ax1.plot(xs*1e3, p_an-p0, label="Incompressible")
-    ax2.plot(xs*1e3, rho-rho0)
-    ax3.plot(xs*1e3, v-v0)
+    ax1.plot(xs*1e3, p-p_init, label="Compressible")
+    ax1.plot(xs*1e3, p_an-p_init, label="Incompressible")
+    ax2.plot(xs*1e3, rho-rho_init)
+    ax3.plot(xs*1e3, v-v_init)
     # ax4.plot(xs, p - p_an)
-    ax4.plot(xs, p/(rho * R) - p0/(rho0*R))
+    ax4.plot(xs, p/(rho * R) - p_init/(rho_init*R))
 
     ax1.set_title("Pressure")
     ax2.set_title("Air Density")
