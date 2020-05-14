@@ -22,7 +22,7 @@ rho_init = 1.225 # [kg/m^3] air density at x=0
 v_init = 50 # [m/s] Carrier fluid velocity
 u = 10000 # [V] voltage between emitter and collector
 u_star = 0
-n_stages = 100
+n_stages = 1
 
 def func_j(guess, E0, v0):
     """
@@ -132,7 +132,7 @@ def plot_iterations(results, step_size=3):
     plt.tight_layout()
     plt.show()
 
-def f_eval(x, u, rho0, v0, p0):
+def f_eval(x, u, rho0, v0, p0, j):
     """
     Evaluate f(x,u) = 0
     N = n_steps - 1 (index of last element)
@@ -150,21 +150,21 @@ def f_eval(x, u, rho0, v0, p0):
     # Calculate first row using forward difference
     f[0] = [(rho[0]*v[0] - rho0*v0) / delta_x,
             ((rho[0]*v[0]**2+p[0]) - (rho0*v0**2+p0))/delta_x - rho_c[0]*E[0],
-            (v[0]*(rho[0]*e[0]+p[0]) - v0*(rho0*e0+p0))/delta_x - rho_c[0]*E[0]*v[0]]
+            (v[0]*(rho[0]*e[0]+p[0]) - v0*(rho0*e0+p0))/delta_x - j*E[0]]
 
     # # Calculate 1 to N-1 using central difference
     f[1:N] = np.array([(rho[2:]*v[2:] - rho[:-2]*v[:-2]) / (2*delta_x),
             ((rho[2:]*v[2:]**2+p[2:]) - (rho[:-2]*v[:-2]**2+p[:-2])) / (2*delta_x) - rho_c[1:-1]*E[1:-1],
-            (v[2:]*(rho[2:]*e[2:]+p[2:]) - v[:-2]*(rho[:-2]*e[:-2]+p[:-2])) / (2*delta_x) - rho_c[1:-1]*E[1:-1]*v[1:-1]
+            (v[2:]*(rho[2:]*e[2:]+p[2:]) - v[:-2]*(rho[:-2]*e[:-2]+p[:-2])) / (2*delta_x) - j*E[1:-1]
             - (T[2:]-2*T[1:-1]+T[:-2])/(delta_x**2)]).T
 
     # Calculate last row using backward difference
     f[N] = [(rho[N]*v[N] - rho[N-1]*v[N-1]) / delta_x ,
             ( ((rho[N]*v[N]**2+p[N]) - (rho[N-1]*v[N-1]**2+p[N-1]))/delta_x - rho_c[N]*E[N] ),
-            ( (v[N]*(rho[N]*e[N]+p[N]) - v[N-1]*(rho[N-1]*e[N-1]+p[N-1]))/delta_x - rho_c[N]*E[N]*v[N] )]
+            ( (v[N]*(rho[N]*e[N]+p[N]) - v[N-1]*(rho[N-1]*e[N-1]+p[N-1]))/delta_x - j*E[N] )]
     return f
 
-def jac_est(x, u, rho0, v0, p0, eps=1e-3):
+def jac_est(x, u, rho0, v0, p0, j, eps=1e-3):
     """
     Numerical jacobian estimator for f
     Flattens x array into [p_0,...,p_i, rho_i, v_i,...,v_N+1] then iterates
@@ -183,7 +183,7 @@ def jac_est(x, u, rho0, v0, p0, eps=1e-3):
         inc[i] = eps
         inc = inc.reshape(x.shape)
         # Evaluate f at x+inc and at x for ith column of jacobian
-        col = (f_eval(x+inc, u, rho0, v0, p0) - f_eval(x, u, rho0, v0, p0)) / eps
+        col = (f_eval(x+inc, u, rho0, v0, p0, j) - f_eval(x, u, rho0, v0, p0, j)) / eps
         jac[:,i] = col.flatten()
     return jac
 
@@ -201,7 +201,7 @@ def model(E0, rho0, v0, p0, tol=1, plot=False):
     x[:,0] *= p0
     x[:,1] *= rho0
     x[:,2] *= v0
-    f = f_eval(x, u, rho0, v0, p0)
+    f = f_eval(x, u, rho0, v0, p0, j)
     # start = time.time()
     # for i in range(5000):
     #     f = f_eval(x, u, rho0, v0, p0)
@@ -210,14 +210,14 @@ def model(E0, rho0, v0, p0, tol=1, plot=False):
     nit = 0
     results = [x.copy()]
     while np.linalg.norm(f) > tol and nit < 100:
-        jac = jac_est(x, u, rho0, v0, p0)
+        jac = jac_est(x, u, rho0, v0, p0, j)
         try:
             dx = np.linalg.solve(jac, -f.flatten())
         except:
             print("Jacobian is singular")
             break
         x += dx.reshape(x.shape)
-        f = f_eval(x, u, rho0, v0, p0)
+        f = f_eval(x, u, rho0, v0, p0, j)
         nit += 1
         if nit%3 == 0: print(nit, np.linalg.norm(f))
         results.append(x.copy())
